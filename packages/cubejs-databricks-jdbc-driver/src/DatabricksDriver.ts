@@ -232,6 +232,7 @@ export class DatabricksDriver extends JDBCDriver {
       exportBucketCsvEscapeSymbol:
         getEnv('dbExportBucketCsvEscapeSymbol', { dataSource }),
       // Azure service principal
+      // Test the version update
       azureTenantId:
         process.env['CUBEJS_DB_EXPORT_BUCKET_AZURE_TENANT_ID'],
       azureClientId:
