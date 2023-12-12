@@ -1,5 +1,5 @@
 {
-  "name": "@biznetwork2/databricks-jdbc-driver",
+  "name": "@biznetwork/databricks-jdbc-driver-v2",
   "description": "Cube.js Databricks database driver",
   "author": "Cube Dev, Inc.",
   "version": "0.34.33",
