@@ -1,12 +1,12 @@
 {
-  "name": "@cubejs-backend/databricks-jdbc-driver",
+  "name": "@biznetwork2/databricks-jdbc-driver",
   "description": "Cube.js Databricks database driver",
   "author": "Cube Dev, Inc.",
   "version": "0.34.33",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/cube-js/cube.git",
+    "url": "https://github.com/MaggieZhang-01/cube/tree/publish-add-azure-credential-v2",
     "directory": "packages/cubejs-databricks-driver"
   },
   "engines": {
