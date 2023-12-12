@@ -233,14 +233,11 @@ export class DatabricksDriver extends JDBCDriver {
         getEnv('dbExportBucketCsvEscapeSymbol', { dataSource }),
       // Azure service principal
       azureTenantId:
-        conf?.azureTenantId ||
-        getEnv('dbExportBucketAzureTenantId', { dataSource }),
+        process.env['CUBEJS_DB_EXPORT_BUCKET_AZURE_TENANT_ID'],
       azureClientId:
-        conf?.azureClientId ||
-        getEnv('dbExportBucketAzureClientId', { dataSource }),
+        process.env['CUBEJS_DB_EXPORT_BUCKET_AZURE_CLIENT_ID'],
       azureClientSecret:
-        conf?.azureClientSecret ||
-        getEnv('dbExportBucketAzureClientSecret', { dataSource }),
+        process.env['CUBEJS_DB_EXPORT_BUCKET_AZURE_CLIENT_SECRET'],
     };
     super(config);
     this.config = config;
