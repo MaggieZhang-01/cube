@@ -2,7 +2,7 @@
   "name": "@cubejs-backend/api-gateway",
   "description": "Cube.js API Gateway",
   "author": "Cube Dev, Inc.",
-  "version": "0.34.33",
+  "version": "0.34.34",
   "repository": {
     "type": "git",
     "url": "https://github.com/cube-js/cube.git",
@@ -43,7 +43,6 @@
     "moment-timezone": "^0.5.27",
     "nexus": "^1.1.0",
     "node-fetch": "^2.6.1",
-    "querystring": "^0.2.1",
     "ramda": "^0.27.0",
     "uuid": "^8.3.2"
   },
