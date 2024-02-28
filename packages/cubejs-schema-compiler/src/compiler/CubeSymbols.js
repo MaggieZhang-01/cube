@@ -11,6 +11,7 @@ const CONTEXT_SYMBOLS = {
   USER_CONTEXT: 'securityContext',
   SECURITY_CONTEXT: 'securityContext',
   FILTER_PARAMS: 'filterParams',
+  FILTER_GROUP: 'filterGroup',
   SQL_UTILS: 'sqlUtils'
 };
 
@@ -372,7 +373,6 @@ export class CubeSymbols {
           title: resolvedMember.title,
           description: resolvedMember.description,
           format: resolvedMember.format,
-          drillMembers: resolvedMember.drillMembers,
         };
       } else if (type === 'dimensions') {
         memberDefinition = {
