@@ -5,6 +5,7 @@ mod partition_filter;
 mod planning;
 pub use planning::PlanningMeta;
 mod check_memory;
+pub mod physical_plan_flags;
 pub mod pretty_printers;
 pub mod query_executor;
 pub mod serialized_plan;
@@ -789,7 +790,7 @@ pub mod tests {
             Arc::new(test_utils::MetaStoreMock {}),
             Arc::new(test_utils::CacheStoreMock {}),
             &vec![],
-            Arc::new(SqlResultCache::new(1 << 20, None)),
+            Arc::new(SqlResultCache::new(1 << 20, None, 10000)),
         )
     }
 

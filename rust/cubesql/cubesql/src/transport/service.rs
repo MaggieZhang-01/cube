@@ -6,24 +6,33 @@ use cubeclient::{
 
 use datafusion::{
     arrow::{datatypes::SchemaRef, record_batch::RecordBatch},
-    logical_plan::window_frames::WindowFrame,
-    physical_plan::{aggregates::AggregateFunction, window_functions::WindowFunction},
+    logical_plan::window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
+    physical_plan::{aggregates::AggregateFunction, windows::WindowFunction},
 };
 use minijinja::{context, value::Value, Environment};
 use serde_derive::*;
-use std::{collections::HashMap, fmt::Debug, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    fmt::Debug,
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 use tokio::{
     sync::{mpsc::Receiver, RwLock as RwLockAsync},
     time::Instant,
 };
+use uuid::Uuid;
 
 use crate::{
     compile::{
-        engine::df::{scan::MemberField, wrapper::SqlQuery},
+        engine::df::{
+            scan::MemberField,
+            wrapper::{GroupingSetDesc, GroupingSetType, SqlQuery},
+        },
         MetaContext,
     },
     sql::{AuthContextRef, HttpAuthContext},
-    CubeError,
+    CubeError, RWLockAsync,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -63,14 +72,56 @@ pub struct SqlResponse {
     pub sql: SqlQuery,
 }
 
+#[derive(Debug)]
+pub struct SpanId {
+    pub span_id: String,
+    pub query_key: serde_json::Value,
+    span_start: SystemTime,
+    is_data_query: RWLockAsync<bool>,
+}
+
+impl SpanId {
+    pub fn new(span_id: String, query_key: serde_json::Value) -> Self {
+        Self {
+            span_id,
+            query_key,
+            span_start: SystemTime::now(),
+            is_data_query: tokio::sync::RwLock::new(false),
+        }
+    }
+
+    pub async fn set_is_data_query(&self, is_data_query: bool) {
+        let mut write = self.is_data_query.write().await;
+        *write = is_data_query;
+    }
+
+    pub async fn is_data_query(&self) -> bool {
+        let read = self.is_data_query.read().await;
+        *read
+    }
+
+    pub fn duration(&self) -> u64 {
+        self.span_start
+            .elapsed()
+            .unwrap_or_else(|_| Duration::from_secs(0))
+            .as_millis() as u64
+    }
+}
+
 #[async_trait]
 pub trait TransportService: Send + Sync + Debug {
     // Load meta information about cubes
     async fn meta(&self, ctx: AuthContextRef) -> Result<Arc<MetaContext>, CubeError>;
 
+    async fn compiler_id(&self, ctx: AuthContextRef) -> Result<Uuid, CubeError> {
+        let meta = self.meta(ctx).await?;
+        Ok(meta.compiler_id)
+    }
+
     // Get sql for query to be used in wrapped SQL query
     async fn sql(
         &self,
+        span_id: Option<Arc<SpanId>>,
         query: V1LoadRequestQuery,
         ctx: AuthContextRef,
         meta_fields: LoadRequestMeta,
@@ -81,6 +132,7 @@ pub trait TransportService: Send + Sync + Debug {
     // Execute load query
     async fn load(
         &self,
+        span_id: Option<Arc<SpanId>>,
         query: V1LoadRequestQuery,
         sql_query: Option<SqlQuery>,
         ctx: AuthContextRef,
@@ -89,6 +141,7 @@ pub trait TransportService: Send + Sync + Debug {
 
     async fn load_stream(
         &self,
+        span_id: Option<Arc<SpanId>>,
         query: V1LoadRequestQuery,
         sql_query: Option<SqlQuery>,
         ctx: AuthContextRef,
@@ -102,6 +155,15 @@ pub trait TransportService: Send + Sync + Debug {
         ctx: AuthContextRef,
         to_user: String,
     ) -> Result<bool, CubeError>;
+
+    async fn log_load_state(
+        &self,
+        span_id: Option<Arc<SpanId>>,
+        ctx: AuthContextRef,
+        meta_fields: LoadRequestMeta,
+        event: String,
+        properties: serde_json::Value,
+    ) -> Result<(), CubeError>;
 }
 
 #[async_trait]
@@ -183,6 +245,7 @@ impl TransportService for HttpTransport {
             response.cubes.unwrap_or_else(Vec::new),
             HashMap::new(),
             HashMap::new(),
+            Uuid::new_v4(),
         ));
 
         *store = Some(MetaCacheBucket {
@@ -195,6 +258,7 @@ impl TransportService for HttpTransport {
 
     async fn sql(
         &self,
+        _span_id: Option<Arc<SpanId>>,
         _query: V1LoadRequestQuery,
         _ctx: AuthContextRef,
         _meta_fields: LoadRequestMeta,
@@ -206,6 +270,7 @@ impl TransportService for HttpTransport {
 
     async fn load(
         &self,
+        _span_id: Option<Arc<SpanId>>,
         query: V1LoadRequestQuery,
         _sql_query: Option<SqlQuery>,
         ctx: AuthContextRef,
@@ -231,6 +296,7 @@ impl TransportService for HttpTransport {
 
     async fn load_stream(
         &self,
+        _span_id: Option<Arc<SpanId>>,
         _query: V1LoadRequestQuery,
         _sql_query: Option<SqlQuery>,
         _ctx: AuthContextRef,
@@ -248,11 +314,27 @@ impl TransportService for HttpTransport {
     ) -> Result<bool, CubeError> {
         panic!("Does not work for standalone mode yet");
     }
+
+    async fn log_load_state(
+        &self,
+        span_id: Option<Arc<SpanId>>,
+        ctx: AuthContextRef,
+        meta_fields: LoadRequestMeta,
+        event: String,
+        properties: serde_json::Value,
+    ) -> Result<(), CubeError> {
+        println!(
+            "Load state: {:?} {:?} {:?} {} {:?}",
+            span_id, ctx, meta_fields, event, properties
+        );
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
 pub struct SqlTemplates {
     pub templates: HashMap<String, String>,
+    pub reuse_params: bool,
     jinja: Environment<'static>,
 }
 
@@ -271,7 +353,7 @@ pub struct TemplateColumn {
 }
 
 impl SqlTemplates {
-    pub fn new(templates: HashMap<String, String>) -> Result<Self, CubeError> {
+    pub fn new(templates: HashMap<String, String>, reuse_params: bool) -> Result<Self, CubeError> {
         let mut jinja = Environment::new();
         for (name, template) in templates.iter() {
             jinja
@@ -284,7 +366,11 @@ impl SqlTemplates {
                 })?;
         }
 
-        Ok(Self { templates, jinja })
+        Ok(Self {
+            templates,
+            jinja,
+            reuse_params,
+        })
     }
 
     pub fn aggregate_function_name(
@@ -303,13 +389,15 @@ impl SqlTemplates {
         from: String,
         projection: Vec<AliasedColumn>,
         group_by: Vec<AliasedColumn>,
+        group_descs: Vec<Option<GroupingSetDesc>>,
         aggregate: Vec<AliasedColumn>,
         alias: String,
-        _filter: Option<String>,
+        filter: Option<String>,
         _having: Option<String>,
         order_by: Vec<AliasedColumn>,
         limit: Option<usize>,
         offset: Option<usize>,
+        distinct: bool,
     ) -> Result<String, CubeError> {
         let group_by = self.to_template_columns(group_by)?;
         let aggregate = self.to_template_columns(aggregate)?;
@@ -321,20 +409,69 @@ impl SqlTemplates {
             .chain(projection.iter())
             .map(|c| c.clone())
             .collect::<Vec<_>>();
+        let quoted_from_alias = self.quote_identifier(&alias)?;
+        let has_grouping_sets = group_descs.iter().any(|d| d.is_some());
+        let group_by_expr = if has_grouping_sets {
+            self.group_by_with_grouping_sets(&group_by, &group_descs)?
+        } else {
+            self.render_template(
+                "statements/group_by_exprs",
+                context! { group_by => group_by },
+            )?
+        };
         self.render_template(
             "statements/select",
             context! {
                 from => from,
                 select_concat => select_concat,
-                group_by => group_by,
+                group_by => group_by_expr,
                 aggregate => aggregate,
                 projection => projection,
                 order_by => order_by,
-                from_alias => alias,
+                filter => filter,
+                from_alias => quoted_from_alias,
                 limit => limit,
                 offset => offset,
+                distinct => distinct,
             },
         )
+    }
+
+    fn group_by_with_grouping_sets(
+        &self,
+        group_by: &Vec<TemplateColumn>,
+        group_descs: &Vec<Option<GroupingSetDesc>>,
+    ) -> Result<String, CubeError> {
+        let mut parts = Vec::new();
+        let mut curr_set = Vec::new();
+        let mut curr_set_desc = None;
+        for (col, desc) in group_by.iter().zip(group_descs.iter()) {
+            if desc != &curr_set_desc {
+                if let Some(curr_desc) = &curr_set_desc {
+                    let part_expr = match curr_desc.group_type {
+                        GroupingSetType::Rollup => self.rollup_expr(curr_set)?,
+                        GroupingSetType::Cube => self.cube_expr(curr_set)?,
+                    };
+                    parts.push(part_expr);
+                }
+                curr_set_desc = desc.clone();
+                curr_set = Vec::new();
+            }
+            if desc.is_some() {
+                curr_set.push(col.index.to_string());
+            } else {
+                parts.push(col.index.to_string())
+            }
+        }
+        if let Some(curr_desc) = &curr_set_desc {
+            let part_expr = match curr_desc.group_type {
+                GroupingSetType::Rollup => self.rollup_expr(curr_set)?,
+                GroupingSetType::Cube => self.cube_expr(curr_set)?,
+            };
+            parts.push(part_expr);
+        }
+
+        Ok(parts.join(", "))
     }
 
     fn to_template_columns(
@@ -449,18 +586,60 @@ impl SqlTemplates {
         )
     }
 
+    pub fn window_frame(&self, window_frame: Option<WindowFrame>) -> Result<String, CubeError> {
+        let Some(window_frame) = window_frame else {
+            return Ok("".to_string());
+        };
+
+        let type_template = match window_frame.units {
+            WindowFrameUnits::Rows => "rows",
+            WindowFrameUnits::Range => "range",
+            WindowFrameUnits::Groups => "groups",
+        };
+        let frame_type = self.render_template(
+            &format!("window_frame_types/{}", type_template),
+            context! {},
+        )?;
+
+        let frame_start = self.window_frame_bound(&window_frame.start_bound)?;
+        let frame_end = self.window_frame_bound(&window_frame.end_bound)?;
+
+        self.render_template(
+            "expressions/window_frame_bounds",
+            context! {
+                frame_type => frame_type,
+                frame_start => frame_start,
+                frame_end => frame_end
+            },
+        )
+    }
+
+    pub fn window_frame_bound(&self, frame_bound: &WindowFrameBound) -> Result<String, CubeError> {
+        match frame_bound {
+            WindowFrameBound::Preceding(n) => {
+                self.render_template("window_frame_bounds/preceding", context! { n => n })
+            }
+            WindowFrameBound::CurrentRow => {
+                self.render_template("window_frame_bounds/current_row", context! {})
+            }
+            WindowFrameBound::Following(n) => {
+                self.render_template("window_frame_bounds/following", context! { n => n })
+            }
+        }
+    }
+
     pub fn window_function_expr(
         &self,
         window_function: WindowFunction,
         args: Vec<String>,
         partition_by: Vec<String>,
         order_by: Vec<String>,
-        _window_frame: Option<WindowFrame>,
+        window_frame: Option<WindowFrame>,
     ) -> Result<String, CubeError> {
         let fun_call = self.window_function(window_function, args)?;
         let partition_by_concat = partition_by.join(", ");
         let order_by_concat = order_by.join(", ");
-        // TODO window_frame
+        let window_frame = self.window_frame(window_frame)?;
         self.render_template(
             "expressions/window_function",
             context! {
@@ -468,7 +647,8 @@ impl SqlTemplates {
                 partition_by => partition_by,
                 partition_by_concat => partition_by_concat,
                 order_by => order_by,
-                order_by_concat => order_by_concat
+                order_by_concat => order_by_concat,
+                window_frame => window_frame
             },
         )
     }
@@ -566,6 +746,62 @@ impl SqlTemplates {
                 negated => negated
             },
         )
+    }
+
+    pub fn rollup_expr(&self, exprs: Vec<String>) -> Result<String, CubeError> {
+        let exprs_concat = exprs.join(", ");
+        self.render_template(
+            "expressions/rollup",
+            context! {
+                exprs_concat => exprs_concat,
+            },
+        )
+    }
+
+    pub fn cube_expr(&self, exprs: Vec<String>) -> Result<String, CubeError> {
+        let exprs_concat = exprs.join(", ");
+        self.render_template(
+            "expressions/cube",
+            context! {
+                exprs_concat => exprs_concat,
+            },
+        )
+    }
+
+    pub fn subquery_expr(&self, subquery_expr: String) -> Result<String, CubeError> {
+        self.render_template(
+            "expressions/subquery",
+            context! {
+                expr => subquery_expr,
+            },
+        )
+    }
+
+    pub fn in_subquery_expr(
+        &self,
+        expr: String,
+        subquery_expr: String,
+        negated: bool,
+    ) -> Result<String, CubeError> {
+        self.render_template(
+            "expressions/in_subquery",
+            context! {
+                expr => expr,
+                subquery_expr => subquery_expr,
+                negated => negated
+            },
+        )
+    }
+
+    pub fn literal_bool_expr(&self, value: bool) -> Result<String, CubeError> {
+        match value {
+            true => self.render_template("expressions/true", context! {}),
+            false => self.render_template("expressions/false", context! {}),
+        }
+    }
+
+    pub fn timestamp_literal_expr(&self, value: String) -> Result<String, CubeError> {
+        self.render_template("expressions/timestamp_literal", context! { value => value })
     }
 
     pub fn param(&self, param_index: usize) -> Result<String, CubeError> {

@@ -3,7 +3,7 @@ redirect_from:
   - /query-format
 ---
 
-# Query format
+# Query format in the REST API
 
 Cube Queries are plain JavaScript objects, describing an analytics query. The
 basic elements of a query (query members) are `measures`, `dimensions`, and
@@ -34,23 +34,18 @@ A Query has the following properties:
   It is an array of objects in [timeDimension format.](#time-dimensions-format)
 - `segments`: An array of segments. A segment is a named filter, created in the
   data model.
-- `limit`: A row limit for your query. The default value is `10000`. The maximum
-  allowed limit is `50000`. If you'd like to request more rows than the maximum
-  allowed limit, consider using [pagination][ref-recipe-pagination].
-- `total`: If set to `true`, Cube will return the total number of rows for a
-  query. The default value is `false`.
+- `limit`: A [row limit][ref-row-limit] for your query.
+- `total`: If set to `true`, Cube will run a [total query][ref-total-query] and
+return the total number of rows as if no row limit or offset are set in the query.
+The default value is `false`.
 - `offset`: The number of initial rows to be skipped for your query. The default
   value is `0`.
 - `order`: An object, where the keys are measures or dimensions to order by and
   their corresponding values are either `asc` or `desc`. The order of the fields
   to order on is based on the order of the keys in the object.
-- `timezone`: All time based calculations performed within Cube are
-  timezone-aware. This property is applied to all time dimensions during
-  aggregation and filtering. It isn't applied to the time dimension referenced
-  in a `dimensions` query property unless granularity or date filter is
-  specified. Using this property you can set your desired timezone in
-  [TZ Database Name](https://en.wikipedia.org/wiki/Tz_database) format, e.g.:
-  `America/Los_Angeles`. The default value is `UTC`.
+- `timezone`: A [time zone][ref-time-zone] for your query. You can set the
+desired time zone in the [TZ Database Name](https://en.wikipedia.org/wiki/Tz_database)
+format, e.g., `America/Los_Angeles`.
 - `renewQuery`: If `renewQuery` is set to `true`, Cube will renew all
   [`refreshKey`][ref-schema-ref-preaggs-refreshkey] for queries and query
   results in the foreground. However, if the
@@ -62,13 +57,8 @@ A Query has the following properties:
   > [`refreshKey.every`][ref-schema-ref-preaggs-refreshkey-every] value together
   > with `renewQuery` to achieve immediate consistency can lead to endless
   > refresh loops and overall system instability.
-- `ungrouped`: If `ungrouped` is set to `true` no `GROUP BY` statement will be
-  added to the query. Instead, the raw results after filtering and joining will
-  be returned without grouping. By default `ungrouped` queries require a primary
-  key as a dimension of every cube involved in the query for security purposes.
-  In case of `ungrouped` query measures will be rendered as underlying `sql` of
-  measures without aggregation and time dimensions will be truncated as usual
-  however not grouped by.
+- `ungrouped`: If set to `true`, Cube will run an [ungrouped
+query][ref-ungrouped-query].
 
 ```json
 {
@@ -151,7 +141,7 @@ Only some operators are available for measures. For dimensions, the available
 operators depend on the
 [type of the dimension](/reference/data-model/types-and-formats#dimension-types).
 
-### equals
+### `equals`
 
 Use it when you need an exact match. It supports multiple values.
 
@@ -166,7 +156,7 @@ Use it when you need an exact match. It supports multiple values.
 }
 ```
 
-### notEquals
+### `notEquals`
 
 The opposite operator of `equals`. It supports multiple values.
 
@@ -181,7 +171,7 @@ The opposite operator of `equals`. It supports multiple values.
 }
 ```
 
-### contains
+### `contains`
 
 The `contains` filter acts as a wildcard case-insensitive `LIKE` operator. In
 the majority of SQL backends it uses `ILIKE` operator with values being
@@ -197,7 +187,7 @@ surrounded by `%`. It supports multiple values.
 }
 ```
 
-### notContains
+### `notContains`
 
 The opposite operator of `contains`. It supports multiple values.
 
@@ -222,11 +212,11 @@ This operator adds `IS NULL` check to include `NULL` values unless you add
 }
 ```
 
-### startsWith
+### `startsWith`
 
 The `startsWith` filter acts as a case-insensitive `LIKE` operator with a
-wildcard at the beginning. In the majority of SQL backends, it uses the `ILIKE`
-operator with `%` at the start of each value. It supports multiple values.
+wildcard at the end. In the majority of SQL backends, it uses the `ILIKE`
+operator with `%` at the end of each value. It supports multiple values.
 
 - Dimension types: `string`.
 
@@ -238,11 +228,15 @@ operator with `%` at the start of each value. It supports multiple values.
 }
 ```
 
-### endsWith
+### `notStartsWith`
+
+The opposite operator of `startsWith`.
+
+### `endsWith`
 
 The `endsWith` filter acts as a case-insensitive `LIKE` operator with a wildcard
-at the end. In the majority of SQL backends, it uses the `ILIKE` operator with
-`%` at the end of each value. It supports multiple values.
+at the beginning. In the majority of SQL backends, it uses the `ILIKE` operator with
+`%` at the beginning of each value. It supports multiple values.
 
 - Dimension types: `string`.
 
@@ -254,7 +248,11 @@ at the end. In the majority of SQL backends, it uses the `ILIKE` operator with
 }
 ```
 
-### gt
+### `notEndsWith`
+
+The opposite operator of `endsWith`.
+
+### `gt`
 
 The `gt` operator means **greater than** and is used with measures or dimensions
 of type `number`.
@@ -270,7 +268,7 @@ of type `number`.
 }
 ```
 
-### gte
+### `gte`
 
 The `gte` operator means **greater than or equal to** and is used with measures
 or dimensions of type `number`.
@@ -286,7 +284,7 @@ or dimensions of type `number`.
 }
 ```
 
-### lt
+### `lt`
 
 The `lt` operator means **less than** and is used with measures or dimensions of
 type `number`.
@@ -302,7 +300,7 @@ type `number`.
 }
 ```
 
-### lte
+### `lte`
 
 The `lte` operator means **less than or equal to** and is used with measures or
 dimensions of type `number`.
@@ -318,7 +316,7 @@ dimensions of type `number`.
 }
 ```
 
-### set
+### `set`
 
 Operator `set` checks whether the value of the member **is not** `NULL`. You
 don't need to pass `values` for this operator.
@@ -333,7 +331,7 @@ don't need to pass `values` for this operator.
 }
 ```
 
-### notSet
+### `notSet`
 
 An opposite to the `set` operator. It checks whether the value of the member
 **is** `NULL`. You don't need to pass `values` for this operator.
@@ -348,7 +346,7 @@ An opposite to the `set` operator. It checks whether the value of the member
 }
 ```
 
-### inDateRange
+### `inDateRange`
 
 <WarningBox>
 
@@ -380,7 +378,7 @@ There is a convenient way to use date filters with grouping -
 }
 ```
 
-### notInDateRange
+### `notInDateRange`
 
 <WarningBox>
 
@@ -405,7 +403,7 @@ dates. The values format is the same as for `inDateRange`.
 }
 ```
 
-### beforeDate
+### `beforeDate`
 
 <WarningBox>
 
@@ -430,7 +428,7 @@ values should be an array of one element in `YYYY-MM-DD` format.
 }
 ```
 
-### afterDate
+### `afterDate`
 
 <WarningBox>
 
@@ -454,7 +452,7 @@ The same as `beforeDate`, but is used to get all results after a specific date.
 }
 ```
 
-### measureFilter
+### `measureFilter`
 
 The `measureFilter` operator is used to apply an existing measure's filters to
 the current query.
@@ -528,8 +526,8 @@ provides a convenient shortcut to pass a dimension and a filter as a
   specified it's equivalent to passing two of the same dates as a date range.
   You can also pass a string with a [relative date
   range][ref-relative-date-range], for example, `last quarter`.
-- `compareDateRange`: An array of date ranges to compare a measure change over
-  previous period
+- `compareDateRange`: An array of date ranges to compare measure values. See
+[compare date range queries][ref-compare-date-range] for details.
 - `granularity`: A granularity for a time dimension. It supports the following
   values `second`, `minute`, `hour`, `day`, `week`, `month`, `quarter`, `year`.
   If you pass `null` to the granularity, Cube will only perform filtering by a
@@ -548,14 +546,14 @@ provides a convenient shortcut to pass a dimension and a filter as a
 }
 ```
 
-You can use compare date range queries when you want to see, for example, how a
-metric performed over a period in the past and how it performs now. You can pass
-two or more date ranges where each of them is in the same format as a
-`dateRange`
+You can use [compare date range queries][ref-compare-date-range] when you want
+to see, for example, how a metric performed over a period in the past and how it
+performs now. You can pass two or more date ranges where each of them is in the
+same format as a `dateRange`:
 
 ```javascript
 // ...
-const resultSet = await cubejsApi.load({
+const resultSet = await cubeApi.load({
   measures: ["stories.count"],
   timeDimensions: [
     {
@@ -600,7 +598,6 @@ refer to its documentation for more examples.
 
 </InfoBox>
 
-[ref-recipe-pagination]: /guides/recipes/queries/pagination
 [ref-client-core-resultset-drilldown]:
   /reference/frontend/cubejs-client-core#result-set-drill-down
 [ref-schema-ref-preaggs-refreshkey]:
@@ -613,3 +610,8 @@ refer to its documentation for more examples.
   /reference/data-model/pre-aggregations#time_dimension
 [ref-relative-date-range]: #relative-date-range
 [chrono-website]: https://github.com/wanasit/chrono
+[ref-row-limit]: /product/apis-integrations/queries#row-limit
+[ref-time-zone]: /product/apis-integrations/queries#time-zone
+[ref-compare-date-range]: /product/apis-integrations/queries#compare-date-range-query
+[ref-total-query]: /product/apis-integrations/queries#total-query
+[ref-ungrouped-query]: /product/apis-integrations/queries#ungrouped-query

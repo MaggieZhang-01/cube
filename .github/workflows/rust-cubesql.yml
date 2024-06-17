@@ -6,14 +6,12 @@ on:
       - '.github/workflows/rust-cubesql.yml'
       - 'packages/cubejs-backend-native/**'
       - 'rust/cubesql/**'
-      - 'rust/cubesql/**'
     branches:
       - 'master'
   pull_request:
     paths:
       - '.github/workflows/rust-cubesql.yml'
       - 'packages/cubejs-backend-native/**'
-      - 'rust/cubesql/**'
       - 'rust/cubesql/**'
 
 jobs:
@@ -28,15 +26,15 @@ jobs:
       - name: Install Rust
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: nightly-2022-03-22
+          toolchain: nightly-2023-12-13
           override: true
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: ./rust/cubesql -> target
           # default key
-          key: cubesql-${{ runner.OS }}-x86_64-unknown-linux-gnu-16
-          shared-key: cubesql-${{ runner.OS }}-x86_64-unknown-linux-gnu-16
+          key: cubesql-${{ runner.OS }}-x86_64-unknown-linux-gnu
+          shared-key: cubesql-${{ runner.OS }}-x86_64-unknown-linux-gnu
       - name: Lint CubeSQL
         run: cd rust/cubesql/cubesql && cargo fmt --all -- --check
       - name: Lint Native
@@ -58,68 +56,32 @@ jobs:
         with:
           # pulls all commits (needed for codecov)
           fetch-depth: 2
-      - name: Install Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: nightly-2022-06-22
-          override: true
-          components: rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: ./rust/cubesql -> target
           # default key
-          key: cubesql-${{ runner.OS }}-x86_64-unknown-linux-gnu-16
-          shared-key: cubesql-${{ runner.OS }}-x86_64-unknown-linux-gnu-16
-      - name: Install tarpaulin@0.20.1
-        uses: baptiste0928/cargo-install@v2
+          key: cubesql-${{ runner.OS }}-x86_64-unknown-linux-gnu
+          shared-key: cubesql-${{ runner.OS }}-x86_64-unknown-linux-gnu
+      - name: Install tarpaulin@0.28.0
+        uses: baptiste0928/cargo-install@v3
         with:
           crate: cargo-tarpaulin
-          version: "0.20.1"
+          version: "0.28.0"
       - name: Unit tests (Rewrite Engine)
         env:
           CUBESQL_TESTING_CUBE_TOKEN: ${{ secrets.CUBESQL_TESTING_CUBE_TOKEN }}
           CUBESQL_TESTING_CUBE_URL: ${{ secrets.CUBESQL_TESTING_CUBE_URL }}
-          CUBESQL_REWRITE_ENGINE: true
           CUBESQL_SQL_PUSH_DOWN: true
+          CUBESQL_REWRITE_CACHE: true
           CUBESQL_REWRITE_TIMEOUT: 60
         run: cd rust/cubesql && cargo tarpaulin --workspace --no-fail-fast --avoid-cfg-tarpaulin --out Xml
-      - name: Upload code coverage
-        uses: codecov/codecov-action@v3
-        with:
-          files: ./rust/cubesql/cobertura.xml
-          verbose: true
-          flags: cubesql
-          fail_ci_if_error: false
-
-  unit_legacy:
-    runs-on: ubuntu-20.04
-    timeout-minutes: 60
-    name: Unit (Legacy)
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          # pulls all commits (needed for codecov)
-          fetch-depth: 2
-      - name: Install Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: nightly-2022-03-22
-          override: true
-          components: rustfmt
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ./rust/cubesql -> target
-          # default key
-          key: cubesql-${{ runner.OS }}-x86_64-unknown-linux-gnu-16
-          shared-key: cubesql-${{ runner.OS }}-x86_64-unknown-linux-gnu-16
-      - name: Unit tests (Legacy Engine)
-        env:
-          CUBESQL_TESTING_CUBE_TOKEN: ${{ secrets.CUBESQL_TESTING_CUBE_TOKEN }}
-          CUBESQL_TESTING_CUBE_URL: ${{ secrets.CUBESQL_TESTING_CUBE_URL }}
-          CUBESQL_SQL_PUSH_DOWN: true
-        run: cd rust/cubesql && cargo test
+#      - name: Upload code coverage
+#        uses: codecov/codecov-action@v3
+#        with:
+#          files: ./rust/cubesql/cobertura.xml
+#          verbose: true
+#          flags: cubesql
+#          fail_ci_if_error: false
 
   native_linux:
     needs: [lint]
@@ -129,8 +91,8 @@ jobs:
     strategy:
       matrix:
         # Current used version + 1 LTS
-        node-version: [16, 18]
-        python-version: ["3.9", "3.10", "3.11", "fallback"]
+        node-version: [18, 20]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "fallback"]
         target: ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
         # minimize number of jobs
         exclude:
@@ -138,9 +100,11 @@ jobs:
             target: "aarch64-unknown-linux-gnu"
           - python-version: 3.10
             target: "aarch64-unknown-linux-gnu"
+          - python-version: 3.11
+            target: "aarch64-unknown-linux-gnu"
       fail-fast: false
     container:
-      image: cubejs/rust-cross:${{ matrix.target }}-30052023
+      image: cubejs/rust-cross:${{ matrix.target }}-02042024
 
     steps:
       - name: Checkout
@@ -148,7 +112,7 @@ jobs:
       - name: Install Rust
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: nightly-2022-03-22
+          toolchain: nightly-2023-12-13
           override: true
           components: rustfmt
           target: ${{ matrix.target }}
@@ -228,7 +192,7 @@ jobs:
     strategy:
       matrix:
         # We do not need to test under all versions, we do it under linux
-        node-version: [16.x]
+        node-version: [18.x]
         os-version: ["macos-11"]
         target: ["x86_64-apple-darwin", "aarch64-apple-darwin"]
         include:
@@ -238,6 +202,8 @@ jobs:
             python-version: "3.10"
           - target: x86_64-apple-darwin
             python-version: "3.11"
+          - target: x86_64-apple-darwin
+            python-version: "3.12"
           - target: x86_64-apple-darwin
             python-version: "fallback"
           - target: aarch64-apple-darwin
@@ -250,7 +216,7 @@ jobs:
       - name: Install Rust
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: nightly-2022-03-22
+          toolchain: nightly-2023-12-13
           override: true
           components: rustfmt
           target: ${{ matrix.target }}
@@ -318,7 +284,7 @@ jobs:
     strategy:
       matrix:
         # We do not need to test under all versions, we do it under linux
-        node-version: [16.x]
+        node-version: [18.x]
         os-version: [windows-2019]
         python-version: ["fallback"]
       fail-fast: false
@@ -332,7 +298,7 @@ jobs:
       - name: Install Rust
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: nightly-2022-03-22
+          toolchain: nightly-2023-12-13
           override: true
           components: rustfmt
       - name: Install Python

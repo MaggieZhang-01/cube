@@ -44,6 +44,16 @@ following guides and configuration examples to get tool-specific instructions:
 
 <Grid imageSize={[56, 56]}>
   <GridItem
+    url="integrations/cloudwatch"
+    imageUrl="https://static.cube.dev/icons/aws.svg"
+    title="Amazon CloudWatch"
+  />
+  <GridItem
+    url="integrations/s3"
+    imageUrl="https://static.cube.dev/icons/aws.svg"
+    title="Amazon S3"
+  />
+  <GridItem
     url="integrations/datadog"
     imageUrl="https://static.cube.dev/icons/datadog.svg"
     title="Datadog"
@@ -69,7 +79,8 @@ export][self-sinks-for-metrics].
 
 Additionally, create a [`vector.toml` configuration file][vector-docs-config]
 next to your `cube.js` file. This file is used to keep sinks configuration. You
-have to commit this file for Vector configuration to take effect.
+have to commit this file to the main branch of your deployment for Vector
+configuration to take effect.
 
 ### Environment variables
 
@@ -123,6 +134,13 @@ specified, only `error` and `info` logs will be exported.
 | `info`  | ✅ Yes               |
 | `debug` | ❌ No                |
 | `trace` | ❌ No                |
+
+<InfoBox>
+
+If you'd like to adjust severity levels of logs from API instances and the
+refresh scheduler, use the `CUBEJS_LOG_LEVEL` environment variable.
+
+</InfoBox>
 
 ### Sinks for logs
 
@@ -251,7 +269,7 @@ setting `CUBE_CLOUD_MONITORING_METRICS_USER` and
 
 [ref-autosuspend]: /product/deployment/cloud/auto-suspension#effects-on-experience
 [self-sinks-for-metrics]: #configuration-sinks-for-metrics
-[ref-vpc]: /product/configuration/vpc
+[ref-vpc]: /product/deployment/cloud/vpc
 [vector]: https://vector.dev/
 [vector-docs-config]: https://vector.dev/docs/reference/configuration/
 [vector-docs-sinks]: https://vector.dev/docs/reference/configuration/sinks/

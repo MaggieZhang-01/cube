@@ -1,9 +1,26 @@
-use crate::compile::rewrite::{
-    CubeScanWrapped, LogicalPlanLanguage, MemberErrorPriority, TimeDimensionGranularity,
+use crate::{
+    compile::{
+        rewrite::{
+            rules::utils::granularity_str_to_int_order, CubeScanUngrouped, CubeScanWrapped,
+            DimensionName, LogicalPlanLanguage, MemberErrorPriority, ScalarUDFExprFun,
+            TimeDimensionGranularity, WrappedSelectUngroupedScan,
+        },
+        MetaContext,
+    },
+    transport::V1CubeMetaDimensionExt,
 };
 use egg::{CostFunction, Id, Language};
+use std::sync::Arc;
 
-pub struct BestCubePlan;
+pub struct BestCubePlan {
+    meta_context: Arc<MetaContext>,
+}
+
+impl BestCubePlan {
+    pub fn new(meta_context: Arc<MetaContext>) -> Self {
+        Self { meta_context }
+    }
+}
 
 /// This cost struct maintains following structural relationships:
 /// - `replacers` > other nodes - having replacers in structure means not finished processing
@@ -22,19 +39,27 @@ pub struct CubePlanCost {
     table_scans: i64,
     empty_wrappers: i64,
     non_detected_cube_scans: i64,
-    filters: i64,
-    structure_points: i64,
-    filter_members: i64,
+    unwrapped_subqueries: usize,
     member_errors: i64,
     // TODO if pre-aggregation can be used for window functions, then it'd be suboptimal
     non_pushed_down_window: i64,
+    non_pushed_down_grouping_sets: i64,
+    ungrouped_aggregates: usize,
     wrapper_nodes: i64,
+    wrapped_select_ungrouped_scan: usize,
     ast_size_outside_wrapper: usize,
+    filters: i64,
+    structure_points: i64,
+    filter_members: i64,
     cube_members: i64,
     errors: i64,
+    time_dimensions_used_as_dimensions: i64,
+    max_time_dimensions_granularity: i64,
     cube_scan_nodes: i64,
+    ast_size_without_alias: usize,
     ast_size: usize,
     ast_size_inside_wrapper: usize,
+    ungrouped_nodes: usize,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -82,9 +107,9 @@ impl CubePlanCostAndState {
         }
     }
 
-    pub fn finalize(&self) -> Self {
+    pub fn finalize(&self, enode: &LogicalPlanLanguage) -> Self {
         Self {
-            cost: self.cost.finalize(&self.state),
+            cost: self.cost.finalize(&self.state, enode),
             state: self.state.clone(),
         }
     }
@@ -103,6 +128,8 @@ impl CubePlanCost {
             }) + other.non_detected_cube_scans,
             filter_members: self.filter_members + other.filter_members,
             non_pushed_down_window: self.non_pushed_down_window + other.non_pushed_down_window,
+            non_pushed_down_grouping_sets: self.non_pushed_down_grouping_sets
+                + other.non_pushed_down_grouping_sets,
             member_errors: self.member_errors + other.member_errors,
             cube_members: self.cube_members + other.cube_members,
             errors: self.errors + other.errors,
@@ -110,14 +137,25 @@ impl CubePlanCost {
             empty_wrappers: self.empty_wrappers + other.empty_wrappers,
             ast_size_outside_wrapper: self.ast_size_outside_wrapper
                 + other.ast_size_outside_wrapper,
+            ungrouped_aggregates: self.ungrouped_aggregates + other.ungrouped_aggregates,
             wrapper_nodes: self.wrapper_nodes + other.wrapper_nodes,
+            wrapped_select_ungrouped_scan: self.wrapped_select_ungrouped_scan
+                + other.wrapped_select_ungrouped_scan,
             cube_scan_nodes: self.cube_scan_nodes + other.cube_scan_nodes,
+            time_dimensions_used_as_dimensions: self.time_dimensions_used_as_dimensions
+                + other.time_dimensions_used_as_dimensions,
+            max_time_dimensions_granularity: self
+                .max_time_dimensions_granularity
+                .max(other.max_time_dimensions_granularity),
+            ast_size_without_alias: self.ast_size_without_alias + other.ast_size_without_alias,
             ast_size: self.ast_size + other.ast_size,
             ast_size_inside_wrapper: self.ast_size_inside_wrapper + other.ast_size_inside_wrapper,
+            ungrouped_nodes: self.ungrouped_nodes + other.ungrouped_nodes,
+            unwrapped_subqueries: self.unwrapped_subqueries + other.unwrapped_subqueries,
         }
     }
 
-    pub fn finalize(&self, state: &CubePlanState) -> Self {
+    pub fn finalize(&self, state: &CubePlanState, enode: &LogicalPlanLanguage) -> Self {
         Self {
             replacers: self.replacers,
             table_scans: self.table_scans,
@@ -130,6 +168,11 @@ impl CubePlanCost {
             filter_members: self.filter_members,
             member_errors: self.member_errors,
             non_pushed_down_window: self.non_pushed_down_window,
+            non_pushed_down_grouping_sets: match state {
+                CubePlanState::Wrapped => 0,
+                CubePlanState::Unwrapped(_) => self.non_pushed_down_grouping_sets,
+                CubePlanState::Wrapper => 0,
+            },
             cube_members: self.cube_members,
             errors: self.errors,
             structure_points: self.structure_points,
@@ -149,10 +192,31 @@ impl CubePlanCost {
                     }
                 }
             } + self.empty_wrappers,
+            time_dimensions_used_as_dimensions: self.time_dimensions_used_as_dimensions,
+            max_time_dimensions_granularity: self.max_time_dimensions_granularity,
+            ungrouped_aggregates: match state {
+                CubePlanState::Wrapped => 0,
+                CubePlanState::Unwrapped(_) => {
+                    if let LogicalPlanLanguage::Aggregate(_) = enode {
+                        if self.ungrouped_nodes > 0 {
+                            1
+                        } else {
+                            0
+                        }
+                    } else {
+                        0
+                    }
+                }
+                CubePlanState::Wrapper => 0,
+            } + self.ungrouped_aggregates,
+            unwrapped_subqueries: self.unwrapped_subqueries,
             wrapper_nodes: self.wrapper_nodes,
+            wrapped_select_ungrouped_scan: self.wrapped_select_ungrouped_scan,
             cube_scan_nodes: self.cube_scan_nodes,
+            ast_size_without_alias: self.ast_size_without_alias,
             ast_size: self.ast_size,
             ast_size_inside_wrapper: self.ast_size_inside_wrapper,
+            ungrouped_nodes: self.ungrouped_nodes,
         }
     }
 }
@@ -194,6 +258,11 @@ impl CostFunction<LogicalPlanLanguage> for BestCubePlan {
 
         let non_pushed_down_window = match enode {
             LogicalPlanLanguage::Window(_) => 1,
+            _ => 0,
+        };
+
+        let non_pushed_down_grouping_sets = match enode {
+            LogicalPlanLanguage::GroupingSetExpr(_) => 1,
             _ => 0,
         };
 
@@ -250,6 +319,47 @@ impl CostFunction<LogicalPlanLanguage> for BestCubePlan {
             LogicalPlanLanguage::CaseExprReplacer(_) => 1,
             LogicalPlanLanguage::WrapperPushdownReplacer(_) => 1,
             LogicalPlanLanguage::WrapperPullupReplacer(_) => 1,
+            LogicalPlanLanguage::FlattenPushdownReplacer(_) => 1,
+            LogicalPlanLanguage::AggregateSplitPushDownReplacer(_) => 1,
+            LogicalPlanLanguage::AggregateSplitPullUpReplacer(_) => 1,
+            LogicalPlanLanguage::ProjectionSplitPushDownReplacer(_) => 1,
+            LogicalPlanLanguage::ProjectionSplitPullUpReplacer(_) => 1,
+            LogicalPlanLanguage::QueryParam(_) => 1,
+            // Not really replacers but those should be deemed as mandatory rewrites and as soon as
+            // there's always rewrite rule it's fine to have replacer cost.
+            // Needs to be added as alias rewrite always more expensive than original function.
+            LogicalPlanLanguage::ScalarUDFExprFun(ScalarUDFExprFun(fun))
+                if fun.as_str() == "current_timestamp" =>
+            {
+                1
+            }
+            LogicalPlanLanguage::ScalarUDFExprFun(ScalarUDFExprFun(fun))
+                if fun.as_str() == "localtimestamp" =>
+            {
+                1
+            }
+            _ => 0,
+        };
+
+        let time_dimensions_used_as_dimensions = match enode {
+            LogicalPlanLanguage::DimensionName(DimensionName(name)) => {
+                if let Some(dimension) = self.meta_context.find_dimension_with_name(name.clone()) {
+                    if dimension.is_time() {
+                        1
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                }
+            }
+            _ => 0,
+        };
+
+        let max_time_dimensions_granularity = match enode {
+            LogicalPlanLanguage::TimeDimensionGranularity(TimeDimensionGranularity(Some(
+                granularity,
+            ))) => (8 - granularity_str_to_int_order(granularity, Some(false)).unwrap_or(0)) as i64,
             _ => 0,
         };
 
@@ -267,6 +377,28 @@ impl CostFunction<LogicalPlanLanguage> for BestCubePlan {
             LogicalPlanLanguage::CrossJoin(_) => 1,
             _ => 0,
         };
+
+        let ast_size_without_alias = match enode {
+            LogicalPlanLanguage::AliasExpr(_) => 0,
+            LogicalPlanLanguage::AliasExprAlias(_) => 0,
+            _ => 1,
+        };
+
+        let ungrouped_nodes = match enode {
+            LogicalPlanLanguage::CubeScanUngrouped(CubeScanUngrouped(true)) => 1,
+            _ => 0,
+        };
+
+        let wrapped_select_ungrouped_scan = match enode {
+            LogicalPlanLanguage::WrappedSelectUngroupedScan(WrappedSelectUngroupedScan(true)) => 1,
+            _ => 0,
+        };
+
+        let unwrapped_subqueries = match enode {
+            LogicalPlanLanguage::Subquery(_) => 1,
+            _ => 0,
+        };
+
         let initial_cost = CubePlanCostAndState {
             cost: CubePlanCost {
                 replacers: this_replacers,
@@ -276,15 +408,23 @@ impl CostFunction<LogicalPlanLanguage> for BestCubePlan {
                 non_detected_cube_scans,
                 member_errors,
                 non_pushed_down_window,
+                non_pushed_down_grouping_sets,
                 cube_members,
                 errors: this_errors,
+                time_dimensions_used_as_dimensions,
+                max_time_dimensions_granularity,
                 structure_points,
+                ungrouped_aggregates: 0,
                 wrapper_nodes,
+                wrapped_select_ungrouped_scan,
                 empty_wrappers: 0,
                 ast_size_outside_wrapper: 0,
                 ast_size_inside_wrapper,
                 cube_scan_nodes,
+                ast_size_without_alias,
                 ast_size: 1,
+                ungrouped_nodes,
+                unwrapped_subqueries,
             },
             state: match enode {
                 LogicalPlanLanguage::CubeScanWrapped(CubeScanWrapped(true)) => {
@@ -301,7 +441,7 @@ impl CostFunction<LogicalPlanLanguage> for BestCubePlan {
                 let child = costs(*id);
                 cost.add_child(&child)
             })
-            .finalize();
+            .finalize(enode);
         res
     }
 }

@@ -1,6 +1,7 @@
 import {
   setupLogger,
   registerInterface,
+  execSql,
   SqlInterfaceInstance,
   Request as NativeRequest,
   LoadRequestMeta,
@@ -32,6 +33,10 @@ export class SQLServer {
       ({ event }) => apiGateway.log(event),
       process.env.CUBEJS_LOG_LEVEL === 'trace' ? 'trace' : 'warn'
     );
+  }
+
+  public async execSql(sqlQuery: string, stream: any, securityContext?: any) {
+    await execSql(this.sqlInterfaceInstance!, sqlQuery, stream, securityContext);
   }
 
   public async init(options: SQLServerOptions): Promise<void> {
@@ -81,7 +86,7 @@ export class SQLServer {
           skipPasswordCheck,
         };
       },
-      meta: async ({ request, session }) => {
+      meta: async ({ request, session, onlyCompilerId }) => {
         const context = await this.apiGateway.contextByReq(<any> request, session.securityContext, request.id);
 
         // eslint-disable-next-line no-async-promise-executor
@@ -89,9 +94,23 @@ export class SQLServer {
           try {
             await this.apiGateway.meta({
               context,
-              res: (message) => {
-                resolve(message);
+              res: (response) => {
+                if ('error' in response) {
+                  reject({
+                    message: response.error
+                  });
+
+                  return;
+                }
+
+                if (onlyCompilerId) {
+                  resolve({ compilerId: response.compilerId });
+                } else {
+                  resolve(response);
+                }
               },
+              includeCompilerId: true,
+              onlyCompilerId
             });
           } catch (e) {
             reject(e);
@@ -108,8 +127,16 @@ export class SQLServer {
               query,
               queryType: 'multi',
               context,
-              res: (message) => {
-                resolve(message);
+              res: (response) => {
+                if ('error' in response) {
+                  reject({
+                    message: response.error
+                  });
+
+                  return;
+                }
+
+                resolve(response);
               },
               apiType: 'sql',
             });
@@ -118,19 +145,28 @@ export class SQLServer {
           }
         });
       },
-      sqlApiLoad: async ({ request, session, query, sqlQuery, streaming }) => {
+      sqlApiLoad: async ({ request, session, query, queryKey, sqlQuery, streaming }) => {
         const context = await contextByRequest(request, session);
 
         // eslint-disable-next-line no-async-promise-executor
         return new Promise(async (resolve, reject) => {
           try {
             await this.apiGateway.sqlApiLoad({
+              queryKey,
               query,
               sqlQuery,
               streaming,
               context,
-              res: (message) => {
-                resolve(message);
+              res: (response) => {
+                if ('error' in response) {
+                  reject({
+                    message: response.error
+                  });
+
+                  return;
+                }
+
+                resolve(response);
               },
               apiType: 'sql',
             });
@@ -151,10 +187,20 @@ export class SQLServer {
               expressionParams,
               exportAnnotatedSql: true,
               memberExpressions: true,
+              disableExternalPreAggregations: true,
               queryType: 'multi',
+              disableLimitEnforcing: true,
               context,
-              res: (message) => {
-                resolve(message);
+              res: (response) => {
+                if ('error' in response) {
+                  reject({
+                    message: response.error
+                  });
+
+                  return;
+                }
+
+                resolve(response);
               },
               apiType: 'sql',
             });
@@ -175,6 +221,14 @@ export class SQLServer {
           }
         });
       },
+      logLoadEvent: async ({ request, session, event, properties }) => {
+        const context = await contextByRequest(request, session);
+
+        this.apiGateway.log({
+          type: event,
+          ...properties
+        }, context);
+      },
       sqlGenerators: async (paramsJson: string) => {
         // TODO get rid of it
         const { request, session } = JSON.parse(paramsJson);
@@ -185,8 +239,16 @@ export class SQLServer {
           try {
             await this.apiGateway.sqlGenerators({
               context,
-              res: (queries) => {
-                resolve(queries);
+              res: (response) => {
+                if ('error' in response) {
+                  reject({
+                    message: response.error
+                  });
+
+                  return;
+                }
+
+                resolve(response);
               },
             });
           } catch (e) {

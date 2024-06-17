@@ -25,6 +25,26 @@ export class DatabricksQuery extends BaseQuery {
     return new DatabricksFilter(this, filter);
   }
 
+  public hllInit(sql: string) {
+    return `hll_sketch_agg(${sql})`;
+  }
+
+  public hllMerge(sql: string) {
+    return `hll_union_agg(${sql})`;
+  }
+
+  public hllCardinality(sql: string): string {
+    return `hll_sketch_estimate(${sql})`;
+  }
+
+  public hllCardinalityMerge(sql: string): string {
+    return `hll_sketch_estimate(hll_union_agg(${sql}))`;
+  }
+
+  public countDistinctApprox(sql: string) {
+    return `approx_count_distinct(${sql})`;
+  }
+
   public convertTz(field: string) {
     return `from_utc_timestamp(${field}, '${this.timezone}')`;
   }
@@ -69,20 +89,12 @@ export class DatabricksQuery extends BaseQuery {
     return 'unix_timestamp()';
   }
 
-  public seriesSql(timeDimension: any) {
-    const values = timeDimension.timeSeries().map(
-      ([from, to]: [string, string]) => `select '${from}' f, '${to}' t`
-    ).join(' UNION ALL ');
-    return `SELECT ${this.timeStampCast('dates.f')} date_from, ${this.timeStampCast('dates.t')} date_to FROM (${values}) AS dates`;
-  }
-
   public orderHashToString(hash: any) {
     if (!hash || !hash.id) {
       return null;
     }
 
     const fieldIndex = this.getFieldIndex(hash.id);
-
     if (fieldIndex === null) {
       return null;
     }
@@ -101,16 +113,6 @@ export class DatabricksQuery extends BaseQuery {
     return null;
   }
 
-  public groupByClause() {
-    const dimensionsForSelect = this.dimensionsForSelect();
-    const dimensionColumns = R.flatten(
-      dimensionsForSelect.map((s: any) => s.selectColumns() && s.aliasName())
-    )
-      .filter(s => !!s);
-
-    return dimensionColumns.length ? ` GROUP BY ${dimensionColumns.join(', ')}` : '';
-  }
-
   public defaultRefreshKeyRenewalThreshold() {
     return 120;
   }
@@ -121,8 +123,10 @@ export class DatabricksQuery extends BaseQuery {
     templates.functions.BTRIM = 'TRIM({% if args[1] is defined %}{{ args[1] }} FROM {% endif %}{{ args[0] }})';
     templates.functions.LTRIM = 'LTRIM({{ args|reverse|join(", ") }})';
     templates.functions.RTRIM = 'RTRIM({{ args|reverse|join(", ") }})';
-    // Databricks has a DATEDIFF function but produces values different from Redshift
-    delete templates.functions.DATEDIFF;
+    templates.functions.DATEDIFF = 'DATEDIFF({{ date_part }}, DATE_TRUNC(\'{{ date_part }}\', {{ args[1] }}), DATE_TRUNC(\'{{ date_part }}\', {{ args[2] }}))';
+    templates.expressions.timestamp_literal = 'from_utc_timestamp(\'{{ value }}\', \'UTC\')';
+    templates.quotes.identifiers = '`';
+    templates.quotes.escape = '``';
     return templates;
   }
 }
