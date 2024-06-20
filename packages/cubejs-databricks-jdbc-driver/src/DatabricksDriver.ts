@@ -238,15 +238,13 @@ export class DatabricksDriver extends JDBCDriver {
       exportBucketCsvEscapeSymbol:
         getEnv('dbExportBucketCsvEscapeSymbol', { dataSource }),
       // Azure service principal
+      //Don't use getEnv() here which is in @cubejs-backend/shared package and will have env not supported error
       azureTenantId:
-        conf?.azureTenantId ||
-        getEnv('dbExportBucketAzureTenantId', { dataSource }),
+        process.env['CUBEJS_DB_EXPORT_BUCKET_AZURE_TENANT_ID'],
       azureClientId:
-        conf?.azureClientId ||
-        getEnv('dbExportBucketAzureClientId', { dataSource }),
+        process.env['CUBEJS_DB_EXPORT_BUCKET_AZURE_CLIENT_ID'],
       azureClientSecret:
-        conf?.azureClientSecret ||
-        getEnv('dbExportBucketAzureClientSecret', { dataSource }),
+        process.env['CUBEJS_DB_EXPORT_BUCKET_AZURE_CLIENT_SECRET'],
     };
     super(config);
     this.config = config;
